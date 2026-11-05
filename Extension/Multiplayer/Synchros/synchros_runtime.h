@@ -31,6 +31,9 @@ struct SessionView {
 
 // Called by the session's update, and when it stops.
 void tick(SteamTransport& transport, const SessionView& view);
+// Players whose outfit was put in the running game since the last call (live_show.h): the session
+// dresses them again.
+[[nodiscard]] std::vector<std::uint64_t> take_redress();
 void stop(SteamTransport& transport);
 
 // The settings, for the settings page and console commands. Any thread.

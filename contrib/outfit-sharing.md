@@ -200,3 +200,28 @@ Skate Synchros
   This is a different route (from a chosen peer, cosmetics only, never owned): is that acceptable?
 - Is a merge layer read after the mods the right place, or should received items load as a
   delta bundle once that exists?
+
+## Showing a received item with no reload (experimental)
+
+Off by default (*Show arrivals with no reload*, or `synchros live on`). Built on the research in
+`live-apply-without-reload.md`, read from Skate.exe 20260929 and not yet tried in the game:
+
+1. Each received outfit mod also holds a **live bundle** (`win32/synchros/live_<wearer>_<n>`
+   in the items superbundle): every received EBX, resource and bundle chunk once more, less item
+   lists and bundle-reference tables. After the live apply (no reload) puts the mod in the TOCs, the
+   bundle is loaded into the level's compartment (5) with the engine's own load
+   (`0x1441b48d0`), polled each update.
+2. Each received item's definition, now loaded, is found by name (`0x1441b5800`) and put in the
+   cosmetics manager's item map (`0x14041fe40`, as `0x140557c40` does for a list's items).
+3. The received presets' rows are added to the loaded `cas_main_bundlereftable`: the table as
+   loaded is read back into a resource (`bundle_ref::unload`), the rows added (`with_presets`),
+   and the result placed at a new address (`load_at`) and swapped in at the table data's + 0x18.
+   (Round trip checked on a real table: identical bytes back, a preset added and found.)
+4. The wearer is dressed again (their cosmetic revision bumped).
+
+Nothing is undone while the game runs: a loaded live bundle stays loaded (`synchros live release`
+lets it go, for trying a level load without it), the old table stays allocated. What is not known
+yet, and the logs will show: whether a bundle the game does not ship loads mid-level; whether a
+definition loaded that way is found by name; whether an item added to the map alone (no list) is
+enough for the peer dressing to wear it; what a level load does with the live bundle still held.
+

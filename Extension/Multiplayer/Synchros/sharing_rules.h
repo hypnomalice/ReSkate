@@ -38,6 +38,9 @@ struct Settings {
     // Show an outfit as soon as it has arrived, by loading the map again for this player alone (a
     // few seconds); otherwise it shows from the next map.
     bool reload_on_arrival{true};
+    // Experimental: show an arrival with no reload at all (live_show.h). Takes the place of
+    // reload_on_arrival while on.
+    bool live_show{false};
 };
 
 // What one session knows of who proved a group code to this player: only for that session, so

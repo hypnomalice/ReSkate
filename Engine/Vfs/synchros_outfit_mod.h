@@ -72,9 +72,24 @@ inline constexpr char outfit_mod_prefix[] = "synchros-";
 // Marks a folder as a received outfit: never listed, never in the wardrobe.
 inline constexpr char outfit_marker_file[] = "reskate-synchros.txt";
 
+// The live bundle: every received EBX, resource and bundle chunk once more, in one bundle of their
+// own the game does not ship ("win32/synchros/live_<wearer>_<version>" in the items superbundle),
+// less item lists and bundle-reference tables. Loaded while a level runs (Extension/Multiplayer/
+// Synchros/live_show.h), it puts a received item's definition and presets in memory without a
+// level reload; the game's own copies of those bundles are already loaded and keep their old
+// contents until the level loads again.
+inline constexpr char live_bundle_prefix[] = "synchros/live_";
+struct LiveRow {
+    std::string table, path;   // table: its resource name, lower case
+    std::uint32_t bundle{};
+};
+
 struct OutfitMod {
     bool written{};
     std::vector<std::string> items;   // the item keys it holds, lower case: kept out of the wardrobe
+    std::string live_bundle;          // the live bundle as a load names it (no "win32/"), or empty
+    std::vector<std::string> definitions;   // each item's own EBX, lower case, as the game names it
+    std::vector<LiveRow> rows;        // the received presets' rows
     std::size_t bundles{}, files{};
     std::uint64_t bytes{};
     std::string problem;              // why nothing was written

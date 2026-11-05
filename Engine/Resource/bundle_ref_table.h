@@ -59,4 +59,19 @@ struct Preset {
 // past the base's list.
 [[nodiscard]] MergedTable with_presets(const Table& base, std::span<const Preset> added);
 
+// A table as the game holds it once loaded: the resource's payload with its five header pointers
+// made absolute (each offset plus the address the payload is at). Skate Synchros' live show
+// (Extension/Multiplayer/Synchros/live_show.cpp) reads a loaded table back into a resource, adds
+// presets, and loads the result at a new address.
+//
+// The payload size a loaded header describes (its lookups end the payload), or 0 when the header
+// is not one of these tables at `address`. `header` is at least the first 96 bytes.
+[[nodiscard]] std::size_t loaded_size(std::span<const std::byte> header, std::uint64_t address);
+// The resource (payload and its 20-byte trailer) and its metadata for a loaded payload at
+// `address`. Throws when it is not a table of this kind.
+[[nodiscard]] Table unload(std::span<const std::byte> loaded, std::uint64_t address, std::vector<std::byte>& resource,
+                           std::vector<std::byte>& meta);
+// A resource's payload, ready to be put at `address`: its header pointers made absolute.
+[[nodiscard]] std::vector<std::byte> load_at(std::span<const std::byte> resource, std::uint64_t address);
+
 } // namespace dingosdk::frostbite::bundle_ref

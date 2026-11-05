@@ -5,6 +5,7 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <array>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -284,6 +285,49 @@ MergedTable with_presets(const Table& base, std::span<const Preset> added) {
     }
     builder.write(result.resource, result.resourceMeta);
     return result;
+}
+
+std::size_t loaded_size(std::span<const std::byte> header, std::uint64_t address) {
+    if (header.size() < 96) return 0;
+    std::array<std::uint64_t, 5> pointers{};
+    std::memcpy(pointers.data(), header.data(), sizeof(pointers));
+    const auto count = u32(header, 72);
+    const auto bundles = u32(header, 76);
+    if (pointers[2] != address + 128 || pointers[3] <= pointers[2] || pointers[1] <= pointers[3] || count > 200000 ||
+        bundles < 2 || bundles > 100000 || u32(header, 92) != 1 || pointers[3] + std::uint64_t{bundles} * 8 != pointers[1])
+        return 0;
+    for (const auto pointer : pointers)
+        if (pointer < address) return 0;
+    const auto size = (pointers[1] - address) + std::uint64_t{count} * 16;
+    if (size > maximum_bytes) return 0;
+    for (const auto pointer : pointers)
+        if (pointer - address >= size) return 0;
+    return static_cast<std::size_t>(size);
+}
+
+Table unload(std::span<const std::byte> loaded, std::uint64_t address, std::vector<std::byte>& resource,
+             std::vector<std::byte>& meta) {
+    const auto payload = loaded_size(loaded, address);
+    if (!payload || payload != loaded.size()) throw std::runtime_error("not a loaded bundle-reference table");
+    resource.assign(loaded.begin(), loaded.end());
+    resource.resize(payload + 20);
+    for (std::size_t i = 0; i < 5; ++i) {
+        put64(resource, i * 8, u64(loaded, i * 8) - address);
+        put32(resource, payload + i * 4, static_cast<std::uint32_t>(i * 8));
+    }
+    meta.assign(16, std::byte{});
+    put32(meta, 0, static_cast<std::uint32_t>(payload));
+    put32(meta, 4, 20);
+    Table table{resource, meta};
+    (void)presets(table);   // throws for anything else
+    return table;
+}
+
+std::vector<std::byte> load_at(std::span<const std::byte> resource, std::uint64_t address) {
+    if (resource.size() < 0x100) throw std::runtime_error("not a bundle-reference table");
+    std::vector<std::byte> out(resource.begin(), resource.end() - 20);
+    for (std::size_t i = 0; i < 5; ++i) put64(out, i * 8, u64(out, i * 8) + address);
+    return out;
 }
 
 } // namespace dingosdk::frostbite::bundle_ref
