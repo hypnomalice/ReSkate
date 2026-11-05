@@ -29,6 +29,9 @@ struct Row {
 // Whether this build has every function the steps call.
 [[nodiscard]] bool supported(std::string& why);
 
+// How many of `definitions` are loaded already (found by name in the level's compartment). The live
+// bundle is not loaded over them: the same assets loaded twice took the game down (2026-11-05).
+[[nodiscard]] std::size_t already_loaded(const std::vector<std::string>& definitions);
 // Step 1. A handle to hold, or nothing (with why).
 [[nodiscard]] std::optional<std::uint64_t> begin_load(const std::string& bundle, std::string& problem);
 enum class Load { running, loaded, failed };

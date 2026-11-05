@@ -269,6 +269,14 @@ void live_tick(State& s, std::uint64_t now) {
                 it = s.live_queue.erase(it);
                 continue;
             }
+            // Anything of it already in memory (an earlier version of the outfit, merged at a level
+            // load) is not loaded again on top: the same assets twice crashed a viewer (2026-11-05).
+            if (const auto loaded = live::already_loaded(l.definitions)) {
+                log("Skate Synchros: live show for " + who + ": " + std::to_string(loaded) +
+                    " of its item(s) are loaded already; it shows from the next level load");
+                it = s.live_queue.erase(it);
+                continue;
+            }
             std::string problem;
             const auto handle = live::begin_load(l.bundle, problem);
             if (!handle) {

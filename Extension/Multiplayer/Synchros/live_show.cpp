@@ -152,6 +152,15 @@ void release(std::uint64_t handle) {
     held.erase(handle);
 }
 
+std::size_t already_loaded(const std::vector<std::string>& definitions) {
+    const auto find = reinterpret_cast<Find>(game::native_data().find_asset);
+    if (!find) return 0;
+    std::size_t n = 0;
+    for (const auto& name : definitions)
+        if (call_find(find, name.c_str())) ++n;
+    return n;
+}
+
 Registered register_items(const std::vector<std::string>& definitions, std::string& problem) {
     Registered out;
     if (!supported(problem)) return out;

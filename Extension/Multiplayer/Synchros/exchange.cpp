@@ -297,7 +297,7 @@ void Exchange::tick() {
         if (look_again && p.welcomed && p.refused.empty()) {
             ask(peer, p);
             std::erase_if(p.retry, [&](const std::string& item) { return !p.asked.contains(item); });
-            if (!p.retry.empty() && ++p.retries <= 60) send(peer, Message{Want{{p.retry.begin(), p.retry.end()}}});
+            if (!p.retry.empty() && ++p.retries <= 12) send(peer, Message{Want{{p.retry.begin(), p.retry.end()}}});
         }
         if (!p.outfit || !p.refused.empty()) continue;
         // Pieces go while the side connection's queue has room: Steam paces them from there.
