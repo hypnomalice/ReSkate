@@ -113,12 +113,23 @@ void Exchange::blocked(std::uint64_t peer) {
 void Exchange::ask(std::uint64_t peer, Peer& p) {
     if (!p.welcomed || !game_.worn_by) return;
     Want want;
-    for (const auto& key : game_.worn_by(peer)) {
+    const auto worn = game_.worn_by(peer);
+    std::size_t have = 0;
+    for (const auto& key : worn) {
         if (want.items.size() >= max_items) break;
-        if (game_.can_show && game_.can_show(key)) continue;   // this PC has it already
+        if (game_.can_show && game_.can_show(key)) {   // this PC has it already (or cannot tell yet)
+            ++have;
+            continue;
+        }
         want.items.push_back(key);
     }
     std::set<std::string> now(want.items.begin(), want.items.end());
+    const auto summary = std::to_string(worn.size()) + "/" + std::to_string(have);
+    if (summary != p.ask_summary && game_.note) {
+        p.ask_summary = summary;
+        game_.note(std::to_string(peer) + " wears " + std::to_string(worn.size()) + " item(s): " +
+                   std::to_string(want.items.size()) + " to ask for, " + std::to_string(have) + " shown from this PC's own mods or the game");
+    }
     if (now == p.asked) return;
     p.asked = std::move(now);
     p.ready_told = false;
@@ -183,7 +194,22 @@ void Exchange::received(std::uint64_t peer, std::span<const std::uint8_t> bytes)
             if (p.welcomed) ask(peer, p);
         } else if constexpr (std::is_same_v<T, Want>) {
             if (!p.outfit || !p.sharing) { refuse(peer, "asked without being let in"); return; }
-            for (const auto& contents : p.outfit->answer(m)) send(peer, Message{contents});
+            std::size_t sent = 0;
+            std::map<std::string, std::size_t> held;
+            static constexpr const char* reasons[] = {"", "not worn", "a store item", "too large", "the game's own",
+                                                      "unreadable here", "custom shaders"};
+            for (const auto& contents : p.outfit->answer(m)) {
+                for (const auto& item : contents.items) {
+                    const auto why = static_cast<std::size_t>(item.withheld);
+                    if (item.withheld == Withheld::none) ++sent;
+                    else ++held[why < std::size(reasons) ? reasons[why] : "held back"];
+                }
+                send(peer, Message{contents});
+            }
+            std::string line = std::to_string(peer) + " asked for " + std::to_string(m.items.size()) + " of this player's items: " +
+                               std::to_string(sent) + " sent";
+            for (const auto& [why, n] : held) line += ", " + std::to_string(n) + " held back (" + why + ")";
+            note(line);
         } else if constexpr (std::is_same_v<T, Contents>) {
             if (!p.welcomed) { refuse(peer, "contents without a welcome"); return; }
             // Only what was asked for, and only items that came whole.
@@ -235,7 +261,11 @@ void Exchange::received(std::uint64_t peer, std::span<const std::uint8_t> bytes)
 }
 
 void Exchange::tick() {
+    // What a player wears is looked at again every few seconds: their outfit packet, or this PC's
+    // list of what it has installed, may not have been there when they first let this player see.
+    const bool look_again = ++ticks_ % 300 == 0;
     for (auto& [peer, p] : peers_) {
+        if (look_again && p.welcomed && p.refused.empty()) ask(peer, p);
         if (!p.outfit || !p.refused.empty()) continue;
         // Pieces go while the side connection's queue has room: Steam paces them from there.
         for (int sent = 0; sent < 64; ++sent) {
