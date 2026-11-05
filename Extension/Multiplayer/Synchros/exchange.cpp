@@ -1,5 +1,6 @@
 #include "exchange.h"
 #include <algorithm>
+#include <map>
 #include <stdexcept>
 #include <variant>
 
@@ -227,6 +228,26 @@ void Exchange::received(std::uint64_t peer, std::span<const std::uint8_t> bytes)
                         std::find(p.to_fetch.begin(), p.to_fetch.end(), file.id) == p.to_fetch.end())
                         p.to_fetch.push_back(file.id);
                 }
+            }
+            {
+                static constexpr const char* reasons[] = {"", "not worn", "a store item", "too large", "the game's own",
+                                                          "unreadable there", "custom shaders"};
+                std::size_t coming = 0, files = 0;
+                std::map<std::string, std::size_t> held;
+                for (const auto& item : m.items) {
+                    if (!p.asked.contains(item.item)) continue;
+                    const auto why = static_cast<std::size_t>(item.withheld);
+                    if (item.withheld == Withheld::none) {
+                        ++coming;
+                        files += item.files.size();
+                    } else {
+                        ++held[why < std::size(reasons) ? reasons[why] : "held back"];
+                    }
+                }
+                std::string line = std::to_string(peer) + " answered for " + std::to_string(m.items.size()) + " item(s): " +
+                                   std::to_string(coming) + " coming (" + std::to_string(files) + " file(s))";
+                for (const auto& [why, n] : held) line += ", " + std::to_string(n) + " held back (" + why + ")";
+                note(line);
             }
             // Only items they still have on are kept.
             std::erase_if(p.listing, [&](const ItemContents& item) { return !p.asked.contains(item.item); });
