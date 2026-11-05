@@ -13,6 +13,7 @@
 #include "Extension/Multiplayer/Steam/steam_transport.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -266,6 +267,24 @@ void live_tick(State& s, std::uint64_t now) {
             const auto status = live_mods::status();
             if (status.find("could not apply") != std::string::npos) {
                 log("Skate Synchros: live show for " + who + " skipped: " + status);
+                it = s.live_queue.erase(it);
+                continue;
+            }
+            // Held back for now: loading a bundle mid-level crashed a viewer at its first chunk lookup
+            // (Skate.exe+0x41d3acb, the bundle's chunk table not built yet: its slots null, 2026-11-05).
+            // Until the engine's lazy build of that table is understood, the outfit shows from the
+            // next level load.
+            // (Set RESKATE_SYNCHROS_LIVE_LOAD=1 to try it anyway.)
+            static const bool load_mid_level = [] {
+                char* value{};
+                std::size_t length{};
+                const bool set = _dupenv_s(&value, &length, "RESKATE_SYNCHROS_LIVE_LOAD") == 0 && value && *value == '1';
+                std::free(value);
+                return set;
+            }();
+            if (!load_mid_level) {
+                log("Skate Synchros: live show for " + who + ": loading mid-level is switched off in this build; "
+                    "it shows from the next level load");
                 it = s.live_queue.erase(it);
                 continue;
             }

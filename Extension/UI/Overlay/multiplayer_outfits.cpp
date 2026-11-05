@@ -104,8 +104,7 @@ void outfits_page(SkateMenu& menu, const Model& model) {
         said(synchros::change([&](synchros::Settings& x) { x.reload_on_arrival = straight_away; return std::string(); }));
     bool live = s.live_show;
     if (toggle_row(menu, "Show arrivals with no reload (experimental)",
-                   "Puts a player's outfit on them as soon as it has arrived, without loading the map again. Still being "
-                   "tried: if it goes wrong, turn it off and send your ReSkate.log.", live))
+                   "Not working yet: in this build it does nothing, and outfits show from the next map.", live))
         said(synchros::change([&](synchros::Settings& x) {
             x.live_show = live;
             return std::string(live ? "Arrivals show with no reload (experimental)." : "Arrivals show as before.");
