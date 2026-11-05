@@ -315,11 +315,13 @@ OutfitMod write_outfit_mod(const fs::path& directory, std::uint64_t wearer, cons
             const std::string live = std::string(live_bundle_prefix) + lower(id);
             std::string live_superbundle;
             for (const auto* item : whole) {
-                const auto own = lower(item->item);
+                // The item is named by its key (Own_Cleany_CTD); its definition is the EBX of that
+                // leaf name (items/cust_fullbodycostume/own_cleany_ctd).
+                const auto own = lower(leaf(item->item));
                 for (const auto& file : item->files) {
                     if (file.kind == OutfitFile::toc_chunk) continue;
                     const auto name = lower(file.name);
-                    if (file.kind == OutfitFile::ebx && name == own) {
+                    if (file.kind == OutfitFile::ebx && (name == own || leaf(name) == own)) {
                         if (live_superbundle.empty()) live_superbundle = lower(file.superbundle);
                         if (std::find(result.definitions.begin(), result.definitions.end(), name) == result.definitions.end())
                             result.definitions.push_back(name);

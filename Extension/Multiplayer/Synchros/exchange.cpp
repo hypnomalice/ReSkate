@@ -133,6 +133,7 @@ void Exchange::ask(std::uint64_t peer, Peer& p) {
     }
     if (now == p.asked) return;
     p.asked = std::move(now);
+    p.retries = 0;
     p.ready_told = false;
     if (want.items.empty()) return;
     send(peer, Message{want});
@@ -220,6 +221,9 @@ void Exchange::received(std::uint64_t peer, std::span<const std::uint8_t> bytes)
                     note(std::to_string(peer) + "'s " + item.item +
                          " uses custom shaders, which are not shared yet: it shows as the default");
                 if (!p.asked.contains(item.item) || item.withheld != Withheld::none) continue;
+                // An item new to the outfit (one asked for again, say) makes it ready again once whole.
+                if (std::none_of(p.listing.begin(), p.listing.end(), [&](const ItemContents& old) { return old.item == item.item; }))
+                    p.ready_told = false;
                 std::erase_if(p.listing, [&](const ItemContents& old) { return old.item == item.item; });
                 p.listing.push_back(item);
                 for (const auto& file : item.files) {
@@ -237,6 +241,10 @@ void Exchange::received(std::uint64_t peer, std::span<const std::uint8_t> bytes)
                 for (const auto& item : m.items) {
                     if (!p.asked.contains(item.item)) continue;
                     const auto why = static_cast<std::size_t>(item.withheld);
+                    // Held back for a reason that passes (their PC still reading its mods, or their
+                    // outfit packet and this one's out of step): asked for again in a few seconds.
+                    if (item.withheld == Withheld::unreadable || item.withheld == Withheld::not_worn) p.retry.insert(item.item);
+                    else p.retry.erase(item.item);
                     if (item.withheld == Withheld::none) {
                         ++coming;
                         files += item.files.size();
@@ -286,7 +294,11 @@ void Exchange::tick() {
     // list of what it has installed, may not have been there when they first let this player see.
     const bool look_again = ++ticks_ % 300 == 0;
     for (auto& [peer, p] : peers_) {
-        if (look_again && p.welcomed && p.refused.empty()) ask(peer, p);
+        if (look_again && p.welcomed && p.refused.empty()) {
+            ask(peer, p);
+            std::erase_if(p.retry, [&](const std::string& item) { return !p.asked.contains(item); });
+            if (!p.retry.empty() && ++p.retries <= 60) send(peer, Message{Want{{p.retry.begin(), p.retry.end()}}});
+        }
         if (!p.outfit || !p.refused.empty()) continue;
         // Pieces go while the side connection's queue has room: Steam paces them from there.
         for (int sent = 0; sent < 64; ++sent) {
