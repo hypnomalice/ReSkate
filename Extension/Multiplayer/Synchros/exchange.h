@@ -105,6 +105,9 @@ private:
         std::map<ContentId, Arriving> arriving;
         std::uint64_t bytes_received{};
         std::set<std::string> custom_shaders;   // their items withheld for custom shaders
+        std::set<std::string> retry;   // asked for, held back for a reason that passes
+        int retries{};                 // asked again (every few seconds, at most 60 times)
+        std::string ask_summary;   // what the last look at their outfit found, as noted
         bool ready_told{};
         // As a wearer.
         bool hello_seen{}, sharing{};
@@ -127,6 +130,7 @@ private:
     Channel& channel_;
     Game game_;
     std::uint64_t me_{}, session_{};
+    std::uint64_t ticks_{};
     SessionGrants grants_;
     std::map<std::uint64_t, Peer> peers_;
     bool settings_changed_{};

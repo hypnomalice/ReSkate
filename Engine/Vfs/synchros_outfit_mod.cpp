@@ -308,6 +308,65 @@ OutfitMod write_outfit_mod(const fs::path& directory, std::uint64_t wearer, cons
                 rows[{lower(row.table_superbundle), lower(row.table_bundle), lower(row.table)}].push_back({row.path, row.bundle});
         }
 
+        // The live bundle (synchros_outfit_mod.h): the same files once more, but item lists and tables.
+        {
+            auto id = directory.filename().string();
+            std::replace(id.begin(), id.end(), '.', '_');
+            const std::string live = std::string(live_bundle_prefix) + lower(id);
+            std::string live_superbundle;
+            for (const auto* item : whole) {
+                // The item is named by its key (Own_Cleany_CTD); its definition is the EBX of that
+                // leaf name (items/cust_fullbodycostume/own_cleany_ctd).
+                const auto own = lower(leaf(item->item));
+                for (const auto& file : item->files) {
+                    if (file.kind == OutfitFile::toc_chunk) continue;
+                    const auto name = lower(file.name);
+                    if (file.kind == OutfitFile::ebx && (name == own || leaf(name) == own)) {
+                        if (live_superbundle.empty()) live_superbundle = lower(file.superbundle);
+                        if (std::find(result.definitions.begin(), result.definitions.end(), name) == result.definitions.end())
+                            result.definitions.push_back(name);
+                    }
+                }
+            }
+            if (!live_superbundle.empty()) {
+                auto& copy = copy_of(live_superbundle, "win32/" + live);
+                for (const auto* item : whole)
+                    for (const auto& file : item->files) {
+                        if (file.kind == OutfitFile::toc_chunk || lower(file.superbundle) != live_superbundle) continue;
+                        const auto name = lower(file.name);
+                        if (file.kind == OutfitFile::ebx && name.starts_with("items/") && name.find("collection") != std::string::npos)
+                            continue;   // item lists: the game's copies are loaded, and a list names other mods' items
+                        if (file.kind == OutfitFile::resource && fb::bundle_ref::is_table(name)) continue;
+                        fb::BundleAsset asset;
+                        asset.name = file.name;
+                        asset.sha1 = to_sha1(file.sha1);
+                        asset.guid = to_guid(file.chunk_guid);
+                        asset.resourceId = file.resource_id;
+                        asset.resourceType = file.resource_type;
+                        asset.resourceMeta = to_bytes(file.resource_meta);
+                        asset.originalSize = file.original_size;
+                        asset.logicalOffset = file.logical_offset;
+                        asset.logicalSize = file.logical_size;
+                        Entry entry{asset, store(copy.install_chunk, stored.at(file.id)), {}, true};
+                        if (file.kind == OutfitFile::ebx) {
+                            entry.asset.kind = fb::AssetKind::ebx;
+                            put(copy.ebx, std::move(entry), [&](const Entry& e) { return lower(e.asset.name) == name; });
+                        } else if (file.kind == OutfitFile::resource) {
+                            entry.asset.kind = fb::AssetKind::resource;
+                            put(copy.resources, std::move(entry), [&](const Entry& e) { return lower(e.asset.name) == name; });
+                        } else {
+                            entry.asset.kind = fb::AssetKind::chunk;
+                            entry.record = to_bytes(file.chunk_record);
+                            put(copy.chunks, std::move(entry), [&](const Entry& e) { return e.asset.guid == asset.guid; });
+                        }
+                    }
+                if (copy.ebx.empty() && copy.resources.empty() && copy.chunks.empty()) bundles.erase({live_superbundle, "win32/" + live});
+                else result.live_bundle = live;
+            }
+            for (const auto& [where, presets] : rows)
+                for (const auto& preset : presets) result.rows.push_back({std::get<2>(where), preset.path, preset.bundle});
+        }
+
         // Received presets go into the game's own table, in the bundle the game keeps it in.
         for (auto& [where, presets] : rows) {
             const auto& [superbundle, bundle, table] = where;

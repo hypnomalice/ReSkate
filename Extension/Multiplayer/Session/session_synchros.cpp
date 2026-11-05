@@ -38,5 +38,10 @@ void update_synchros(Session& s, std::uint64_t) {
         }
     }
     synchros::tick(s.transport, view);
+    // A wearer whose outfit was just put in the running game (live show): dressed again, as when
+    // their outfit changes.
+    for (const auto id : synchros::take_redress())
+        for (auto& peer : active_peers(s))
+            if (peer.member.id == id) ++peer.cosmetic_revision;
 }
 } // namespace dingosdk::multiplayer::session_detail

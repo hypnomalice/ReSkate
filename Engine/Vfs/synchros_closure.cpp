@@ -108,7 +108,7 @@ struct Index::State {
     std::unordered_map<std::string, std::vector<std::size_t>> by_leaf, bundle_assets;
     std::unordered_map<std::uint64_t, std::size_t> by_resource;
     std::unordered_map<std::uint64_t, std::vector<std::size_t>> chunk_by_prefix;
-    std::vector<char> shader_source;             // by source: it adds shaders (Cut::custom_shaders)
+    std::vector<unsigned char> shader_source;             // by source: 1 a Deck Tool shader, 2 shader bytecode, 4 level data
     std::set<std::string> bundle_chunk_listed;   // chunks a bundle entry of is indexed
     std::unordered_map<std::string, std::size_t> bundle_twin;   // a TOC chunk's guid -> its bundle entry
     std::size_t unreadable{};
@@ -204,7 +204,7 @@ struct Index::State {
             for (auto it = fs::recursive_directory_iterator(dir / "Win32" / "levels", error);
                  !error && it != fs::recursive_directory_iterator(); it.increment(error))
                 if (it->is_regular_file(error) && lower(it->path().extension().string()) == ".toc") {
-                    shader_source[s] = 1;
+                    shader_source[s] = static_cast<unsigned char>(shader_source[s] | 4U);
                     break;
                 }
         }
@@ -264,11 +264,12 @@ struct Index::State {
                     auto& in_bundle = bundle_assets[without_win32(bundle_name)];
                     auto add = [&](Piece::Kind kind, const fb::BundleAsset& asset, std::size_t at) {
                         if (at >= region.files.size() || !region.files[at].location.patch) return;  // the game's own
-                        if (kind == Piece::resource && (asset.resourceType == fb::shader::programLookupType ||
-                                                        asset.resourceType == fb::shader::textureLookupType ||
-                                                        asset.resourceType == fb::shader::bytecodeType))
-                            shader_source.at(s) = 1;
                         const auto name = lower(asset.name);
+                        // A Deck Tool deck's own shader resource (reskate-deck-tool deck_archive.py), or
+                        // shader bytecode (SDEC's programs; counted only with level data, below).
+                        if (kind == Piece::resource && name.starts_with("characters/maincharacters/reskate/shaders/"))
+                            shader_source.at(s) = static_cast<unsigned char>(shader_source.at(s) | 1U);
+                        if (kind == Piece::resource && asset.resourceType == fb::shader::bytecodeType) shader_source.at(s) = static_cast<unsigned char>(shader_source.at(s) | 2U);
                         // Every mod ships its own copy of a bundle-reference table under the
                         // game's name, with its own presets added: all of them are read, whichever
                         // wins the name, and none is ever a piece of an item.
@@ -406,7 +407,13 @@ std::optional<Cut> Index::cut(std::string_view item) {
     else return std::nullopt;
 
     Cut cut{s.nodes[start].piece.name, {}, {}, 0};
-    cut.custom_shaders = s.nodes[start].piece.source < s.shader_source.size() && s.shader_source[s.nodes[start].piece.source];
+    // Custom shaders: a Deck Tool deck (its own shader resource), or a mod that ships shader programs
+    // and the maps' shader data (SDEC). Editing the shared lookup tables alone does not count: most
+    // Studio cosmetic packs carry copies of them (2026-11-05: three ordinary items held back).
+    if (const auto own = s.nodes[start].piece.source; own < s.shader_source.size()) {
+        const auto flags = s.shader_source[own];
+        cut.custom_shaders = (flags & 1U) != 0 || ((flags & 2U) != 0 && (flags & 4U) != 0);
+    }
     std::vector<char> seen(s.nodes.size());
     std::set<std::uint64_t> placed;
     std::deque<std::size_t> queue{start};

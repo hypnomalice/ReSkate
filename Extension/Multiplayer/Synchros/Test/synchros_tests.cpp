@@ -459,7 +459,9 @@ class FakeCloset final : public Closet {
 public:
     std::map<std::string, dingosdk::synchros::Cut> cuts;
     std::map<std::uint32_t, std::vector<std::byte>> stored;   // by piece offset
+    bool reading{};   // still reading its mods: nothing can be cut yet
     std::optional<dingosdk::synchros::Cut> cut(std::string_view item) override {
+        if (reading) return std::nullopt;
         const auto f = cuts.find(std::string(item));
         if (f == cuts.end()) return std::nullopt;
         return f->second;
@@ -554,6 +556,53 @@ struct Wire final : Channel {
     std::int64_t pending(std::uint64_t) const override { return 0; }
     void close(std::uint64_t peer) override { closed.insert(peer); }
 };
+
+// The wearer is still reading its mods when asked: the items are held back as unreadable, and the
+// viewer asks again a few seconds later (2026-11-05: a wearer with 1721 items took three seconds).
+void an_item_held_back_while_the_wearer_reads_is_asked_for_again() {
+    const auto root = std::filesystem::temp_directory_path() / "synchros-retry-test";
+    std::filesystem::remove_all(root);
+    FakeCloset my_mods, their_mods;
+    const auto a = my_mods.add(1, 700);
+    my_mods.cuts["own_hat"] = {"items/own_hat", {a}, {}, 0};
+    my_mods.reading = true;
+    Cache my_cache(root / "mine"), their_cache(root / "theirs");
+    Settings mine, theirs;
+    mine.share = true;
+    mine.own_code = *read_code(make_code(CodeKind::personal), CodeKind::personal);
+    theirs.show = true;
+    (void)enter_code(theirs, show_code(mine.own_code, CodeKind::personal));
+    std::deque<std::pair<std::uint64_t, std::vector<std::uint8_t>>> to_them, to_me;
+    Wire my_wire, their_wire;
+    my_wire.outbox = &to_them;
+    their_wire.outbox = &to_me;
+    std::vector<std::uint64_t> ready;
+    Game my_game{[](std::uint64_t) { return std::set<std::string>{}; }, [](std::string_view) { return true; },
+                 [] { return std::set<std::string>{"own_hat"}; }, [](std::string_view) { return false; }, nullptr, nullptr};
+    Game their_game{[](std::uint64_t) { return std::set<std::string>{"own_hat"}; }, [](std::string_view) { return false; },
+                    [] { return std::set<std::string>{}; }, [](std::string_view) { return false; },
+                    [&](std::uint64_t wearer) { ready.push_back(wearer); }, nullptr};
+    Exchange my_side(mine, my_cache, my_mods, my_wire, my_game, me);
+    Exchange their_side(theirs, their_cache, their_mods, their_wire, their_game, them);
+    my_side.begin(session);
+    their_side.begin(session);
+    my_side.connected(them);
+    their_side.connected(me);
+    const auto run = [&](int rounds) {
+        for (int round = 0; round < rounds; ++round) {
+            my_side.tick();
+            their_side.tick();
+            while (!to_them.empty()) { auto m = std::move(to_them.front()); to_them.pop_front(); their_side.received(me, m.second); }
+            while (!to_me.empty()) { auto m = std::move(to_me.front()); to_me.pop_front(); my_side.received(them, m.second); }
+        }
+    };
+    run(50);
+    check(ready.empty(), "nothing is ready while the wearer cannot cut the item");
+    my_mods.reading = false;
+    run(700);
+    check(ready == std::vector<std::uint64_t>{me}, "asked again, the item arrives, and the outfit is ready once");
+    check(their_cache.listing(me).size() == 1 && their_cache.missing(me).empty(), "with its file");
+}
 
 void two_players_exchange_an_outfit_end_to_end() {
     const auto root = std::filesystem::temp_directory_path() / "synchros-exchange-test";
@@ -768,6 +817,7 @@ int main() {
         the_wearer_sends_only_what_is_worn_and_offered();
         a_custom_shader_item_is_withheld();
         two_players_exchange_an_outfit_end_to_end();
+        an_item_held_back_while_the_wearer_reads_is_asked_for_again();
         settings_survive_a_restart();
         a_code_entered_after_connecting_counts_at_once();
     } catch (const std::exception& e) {

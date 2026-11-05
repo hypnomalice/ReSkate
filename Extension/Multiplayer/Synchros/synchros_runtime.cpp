@@ -1,5 +1,6 @@
 #include "synchros_runtime.h"
 #include "exchange.h"
+#include "live_show.h"
 #include "received.h"
 #include "settings_file.h"
 #include "wearer.h"
@@ -17,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace dingosdk::multiplayer::synchros {
 namespace fs = std::filesystem;
@@ -133,6 +135,23 @@ struct State {
     std::atomic<bool> arrived{};
     std::uint64_t last_ready{}, last_reload{};
 
+    // Experimental: arrivals shown with no reload (live_show.h). A written outfit waits here for
+    // the next apply; once that apply is done its live bundle is loaded, then its items and rows go
+    // in and the wearer is dressed again.
+    struct Live {
+        std::uint64_t wearer{};
+        std::string bundle;
+        std::vector<std::string> definitions;
+        std::vector<dingosdk::synchros::live::Row> rows;
+        std::uint64_t handle{}, started{};
+        bool applied{};   // the apply that puts its mod in the TOCs has been started
+    };
+    std::mutex live_mutex;              // live_written: filled by the writing threads
+    std::vector<Live> live_written, live_queue;
+    std::map<std::uint64_t, std::uint64_t> live_held;    // wearer -> the loaded live bundle's handle
+    std::vector<std::uint64_t> redress;
+    std::map<std::uint64_t, int> bumps;                  // revision changes the redress itself makes
+
     void load() {
         if (loaded) return;
         loaded = true;
@@ -164,6 +183,13 @@ void write_outfit(std::uint64_t wearer) {
                 log("Skate Synchros: " + std::to_string(made.items.size()) + " of " + std::to_string(wearer) +
                     "'s items made into a mod; they show from the next level load");
                 for (const auto& key : made.items) log("Skate Synchros:   " + std::to_string(wearer) + " wears " + key);
+                if (!made.live_bundle.empty()) {
+                    State::Live live{wearer, made.live_bundle, made.definitions, {}, 0, 0, false};
+                    for (const auto& row : made.rows) live.rows.push_back({row.table, row.path, row.bundle});
+                    std::lock_guard lock(st.live_mutex);
+                    std::erase_if(st.live_written, [&](const State::Live& l) { return l.wearer == wearer; });
+                    st.live_written.push_back(std::move(live));
+                }
                 st.arrived = true;
                 st.apply_wanted = true;
             } else {
@@ -212,6 +238,79 @@ void stop_locked(State& s, SteamTransport& transport) {
 
 } // namespace
 
+// The live show's steps for each queued outfit, once its apply is done (live_show.h).
+void live_tick(State& s, std::uint64_t now) {
+    namespace live = dingosdk::synchros::live;
+    for (auto it = s.live_queue.begin(); it != s.live_queue.end();) {
+        auto& l = *it;
+        const auto who = std::to_string(l.wearer);
+        if (!l.applied) {
+            log("Skate Synchros: live show for " + who + " skipped: the apply did not start");
+            it = s.live_queue.erase(it);
+            continue;
+        }
+        if (!l.handle) {
+            const auto status = live_mods::status();
+            if (status.find("could not apply") != std::string::npos) {
+                log("Skate Synchros: live show for " + who + " skipped: " + status);
+                it = s.live_queue.erase(it);
+                continue;
+            }
+            std::string problem;
+            const auto handle = live::begin_load(l.bundle, problem);
+            if (!handle) {
+                log("Skate Synchros: live show for " + who + ": step 1, loading " + l.bundle + ", failed: " + problem);
+                it = s.live_queue.erase(it);
+                continue;
+            }
+            l.handle = *handle;
+            l.started = now;
+            log("Skate Synchros: live show for " + who + ": step 1, loading " + l.bundle);
+            ++it;
+            continue;
+        }
+        const auto state = live::poll(l.handle);
+        if (state == live::Load::running) {
+            if (now - l.started > 60000) {
+                log("Skate Synchros: live show for " + who + ": step 1 still loading after a minute; left running");
+                it = s.live_queue.erase(it);
+            } else {
+                ++it;
+            }
+            continue;
+        }
+        if (state == live::Load::failed) {
+            log("Skate Synchros: live show for " + who + ": step 1, loading " + l.bundle + ", failed");
+            live::release(l.handle);
+            it = s.live_queue.erase(it);
+            continue;
+        }
+        log("Skate Synchros: live show for " + who + ": step 1 done in " + std::to_string(now - l.started) + " ms");
+        // The wearer's older live bundle stays loaded too: what the manager and tables point at is
+        // never freed while the game runs.
+        s.live_held[l.wearer] = l.handle;
+        std::string problem;
+        const auto registered = live::register_items(l.definitions, problem);
+        log("Skate Synchros: live show for " + who + ": step 2, " + std::to_string(registered.added) + " item(s) added, " +
+            std::to_string(registered.known) + " already known" + (problem.empty() ? "" : " (" + problem + ")"));
+        for (const auto& name : registered.not_loaded) log("Skate Synchros:   not loaded: " + name);
+        problem.clear();
+        const auto rows = live::add_rows(l.rows, problem);
+        log("Skate Synchros: live show for " + who + ": step 3, " + std::to_string(rows) + " of " + std::to_string(l.rows.size()) +
+            " preset row(s) added" + (problem.empty() ? "" : " (" + problem + ")"));
+        s.redress.push_back(l.wearer);
+        ++s.bumps[l.wearer];
+        log("Skate Synchros: live show for " + who + ": dressing them again");
+        it = s.live_queue.erase(it);
+    }
+}
+
+std::vector<std::uint64_t> take_redress() {
+    auto& s = state();
+    std::lock_guard lock(s.mutex);
+    return std::exchange(s.redress, {});
+}
+
 void tick(SteamTransport& transport, const SessionView& view) {
     auto& s = state();
     std::lock_guard lock(s.mutex);
@@ -250,8 +349,13 @@ void tick(SteamTransport& transport, const SessionView& view) {
         }
         const auto revision = s.revisions.find(player.id);
         if (revision == s.revisions.end() || revision->second != player.outfit_revision) {
+            // A redress for a live show changes the revision too; that is not a new outfit.
+            const auto bump = s.bumps.find(player.id);
+            const bool ours = revision != s.revisions.end() && bump != s.bumps.end() &&
+                              player.outfit_revision == revision->second + static_cast<std::uint64_t>(bump->second);
             s.revisions[player.id] = player.outfit_revision;
-            if (revision != s.revisions.end()) s.exchange->outfit_changed(player.id);
+            if (ours) s.bumps.erase(bump);
+            else if (revision != s.revisions.end()) s.exchange->outfit_changed(player.id);
         }
     }
     std::erase_if(s.worn, [&](const auto& entry) { return !present.contains(entry.first); });
@@ -268,14 +372,24 @@ void tick(SteamTransport& transport, const SessionView& view) {
     // reload at most once a minute, so a lobby full of arrivals is not a string of loading screens.
     if (s.arrived && !s.last_ready) s.last_ready = now;
     if (s.apply_wanted && !s.writing && !live_mods::busy() && (!s.last_ready || now - s.last_ready > 3000)) {
-        const bool reload = s.arrived && s.settings.reload_on_arrival && (!s.last_reload || now - s.last_reload > 60000);
+        const bool reload = !s.settings.live_show && s.arrived && s.settings.reload_on_arrival &&
+                            (!s.last_reload || now - s.last_reload > 60000);
         s.apply_wanted = false;
         s.arrived = false;
         s.last_ready = 0;
         if (reload) s.last_reload = now;
         log("Skate Synchros: applying received outfits" + std::string(reload ? ", and loading the map again to show them: " : ": ") +
             live_mods::apply(reload));
+        std::lock_guard live_lock(s.live_mutex);
+        for (auto& live : s.live_written) {
+            if (!s.settings.live_show) continue;
+            live.applied = live_mods::busy();
+            std::erase_if(s.live_queue, [&](const State::Live& l) { return l.wearer == live.wearer; });
+            s.live_queue.push_back(std::move(live));
+        }
+        s.live_written.clear();
     }
+    if (!s.live_queue.empty() && !live_mods::busy()) live_tick(s, now);
 }
 
 void stop(SteamTransport& transport) {
@@ -508,13 +622,38 @@ std::string console_command(std::string_view text) {
         block_player(*id);
         return "Blocked: they neither see your outfit nor show theirs, and what you had of theirs is gone.";
     }
+    if (verb == "live") {
+        // Experimental (live_show.h): on | off, what is loaded, and release for trying a level load
+        // with the live bundles gone.
+        const auto what = arg(1);
+        if (what == "on" || what == "off")
+            return change([&](Settings& x) {
+                x.live_show = what == "on";
+                return std::string(x.live_show ? "Arrivals show with no reload (experimental)." : "Arrivals show as before.");
+            });
+        auto& st = state();
+        std::lock_guard lock(st.mutex);
+        if (what == "release") {
+            for (const auto& [wearer, handle] : st.live_held) dingosdk::synchros::live::release(handle);
+            const auto n = st.live_held.size();
+            st.live_held.clear();
+            return "Released " + std::to_string(n) + " live bundle(s).";
+        }
+        std::string why;
+        std::vector<std::string> lines{std::string("Live show is ") + (st.settings.live_show ? "on" : "off") +
+                                       (dingosdk::synchros::live::supported(why) ? "" : "; " + why) + ".",
+                                       std::to_string(st.live_held.size()) + " live bundle(s) loaded, " +
+                                           std::to_string(st.live_queue.size()) + " waiting."};
+        for (const auto& [wearer, handle] : st.live_held) lines.push_back("  " + std::to_string(wearer));
+        return join_lines(lines);
+    }
     if (verb == "cache") return "Received outfits take " + std::to_string(cache_bytes() / 1000000) + " MB.";
     if (verb == "empty-cache") {
         empty_cache();
         return "Emptied: shared outfits show as stand-ins again from the next level load.";
     }
     return "synchros status | share on|off | show on|off | code | new-code | add <code> | remove <code> | codes | "
-           "group ... | groups | paired | unpair <id> | block <id> | unblock <id> | cache | empty-cache";
+           "group ... | groups | paired | unpair <id> | block <id> | unblock <id> | cache | empty-cache | live [on|off|release]";
 }
 
 } // namespace dingosdk::multiplayer::synchros
