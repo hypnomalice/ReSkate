@@ -12,6 +12,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <variant>
 
@@ -468,7 +469,10 @@ std::optional<Cut> Index::cut(std::string_view item) {
         cut.custom_shaders = (flags & 1U) != 0 || ((flags & 2U) != 0 && (flags & 4U) != 0);
     }
     std::vector<char> seen(s.nodes.size());
-    std::set<std::uint64_t> placed;
+    // A piece is sent once per place it is read from, but a chunk's bundle entry (beside its TOC
+    // copy) shares the TOC copy's place and is a piece of its own: without it the viewer's bundle
+    // lacks the chunk (2026-11-05: the entries were made, and dropped here as already placed).
+    std::set<std::tuple<std::uint64_t, int, std::string>> placed;
     std::deque<std::size_t> queue{start};
     seen[start] = 1;
     while (!queue.empty()) {
@@ -480,7 +484,8 @@ std::optional<Cut> Index::cut(std::string_view item) {
         // and a whole table is not either: the rows below say what it adds for this item.
         if (at != start && n.item) continue;
         if (n.piece.kind == Piece::resource && fb::bundle_ref::is_table(n.piece.name)) continue;
-        if (placed.insert(placement(n.piece.source, n.piece.file)).second) {
+        const bool bundle_entry = n.piece.kind == Piece::chunk;
+        if (placed.insert({placement(n.piece.source, n.piece.file), bundle_entry ? 1 : 0, bundle_entry ? n.piece.bundle : std::string()}).second) {
             cut.pieces.push_back(n.piece);
             cut.bytes += n.piece.file.size;
         }
@@ -501,7 +506,7 @@ std::optional<Cut> Index::cut(std::string_view item) {
         }
         for (const auto& entry : chosen) {
             const auto& list = s.nodes[entry.second].piece;
-            if (placed.insert(placement(list.source, list.file)).second) {
+            if (placed.insert({placement(list.source, list.file), 0, std::string()}).second) {
                 cut.pieces.push_back(list);
                 cut.bytes += list.file.size;
             }
