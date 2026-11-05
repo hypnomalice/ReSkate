@@ -512,6 +512,10 @@ void empty_cache() {
     s.cache->empty();
     std::error_code ec;
     fs::remove_all(outfit_mods_root(), ec);
+    // Outfits merged when the game started stay loaded until the merge runs again, so say so: a log
+    // that shows Empty followed by a crash from an old outfit is otherwise hard to read.
+    log("Skate Synchros: received outfits emptied" + (ec ? " (some files could not be removed: " + ec.message() + ")" : std::string()) +
+        "; ones already loaded stay until the next level load");
     s.apply_wanted = true;
 }
 
