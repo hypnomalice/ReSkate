@@ -110,12 +110,19 @@ struct OutfitFolder {
     std::filesystem::path directory;
     std::vector<std::string> items;   // from its marker
     std::string fingerprint;          // of what it was written from (outfit_fingerprint), from its marker
+    std::uint32_t process{};          // the game process that wrote it (this_process), from its marker
+    // Written by this run of the game. A received outfit belongs to the session it came in: one
+    // left from an earlier run is not merged again (the launcher's merge or a later one), so an
+    // outfit a fix has since changed never comes back before it is sent again (2026-11-05: a viewer
+    // crashed on joining, dressing a wearer in a stale copy merged at launch).
+    [[nodiscard]] bool this_run() const;
     [[nodiscard]] std::string mod_name() const;
 };
 // What a mod written from `items` holds, as text: the same items and files give the same text, so a
 // wearer's outfit received again unchanged need not be written or applied again. The format
 // version is part of it, so a writer that changes what it writes makes every outfit new again.
 [[nodiscard]] std::string outfit_fingerprint(const std::vector<OutfitItem>& items);
+[[nodiscard]] std::uint32_t this_process() noexcept;
 [[nodiscard]] std::vector<OutfitFolder> outfit_folders(const std::filesystem::path& root);
 // Where the next version of `wearer`'s mod goes.
 [[nodiscard]] std::filesystem::path next_outfit_folder(const std::filesystem::path& root, std::uint64_t wearer);

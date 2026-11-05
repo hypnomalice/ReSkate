@@ -181,7 +181,7 @@ void write_outfit(std::uint64_t wearer) {
             // The same outfit as last time (asked for again and sent again unchanged): nothing to do.
             const auto fingerprint = dingosdk::synchros::outfit_fingerprint(items);
             for (const auto& folder : dingosdk::synchros::outfit_folders(outfit_mods_root()))
-                if (folder.wearer == wearer && folder.fingerprint == fingerprint) {
+                if (folder.wearer == wearer && folder.fingerprint == fingerprint && folder.this_run()) {
                     log("Skate Synchros: " + std::to_string(wearer) + "'s outfit is as it was; already applied");
                     --st.writing;
                     return;

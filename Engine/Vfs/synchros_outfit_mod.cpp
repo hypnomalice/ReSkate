@@ -7,6 +7,11 @@
 #include "Engine/Resource/cas_codec.h"
 #include "Engine/Resource/toc.h"
 
+#ifdef _WIN32
+#include <Windows.h>
+#else
+#include <unistd.h>
+#endif
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -461,7 +466,8 @@ OutfitMod write_outfit_mod(const fs::path& directory, std::uint64_t wearer, cons
         // The game version stamp every mod that ships game data needs (mod_list.h, studio_marker_file).
         write_text(building / ".reskate-studio-patch",
                    "ReSkate Skate Synchros\nskate_sha256=" + std::string(supported_build::game_sha256) + "\n");
-        std::string marker = "wearer=" + std::to_string(wearer) + "\nfingerprint=" + outfit_fingerprint(items) + "\n";
+        std::string marker = "wearer=" + std::to_string(wearer) + "\nfingerprint=" + outfit_fingerprint(items) +
+                             "\nprocess=" + std::to_string(this_process()) + "\n";
         for (const auto& key : keys) marker += "item=" + key + "\n";
         write_text(building / outfit_marker_file, marker);
 
@@ -504,6 +510,16 @@ std::string OutfitFolder::mod_name() const {
     return std::string(outfit_mod_prefix) + std::to_string(wearer) + "." + std::to_string(version);
 }
 
+std::uint32_t this_process() noexcept {
+#ifdef _WIN32
+    return static_cast<std::uint32_t>(GetCurrentProcessId());
+#else
+    return static_cast<std::uint32_t>(getpid());
+#endif
+}
+
+bool OutfitFolder::this_run() const { return process != 0 && process == this_process(); }
+
 std::string outfit_fingerprint(const std::vector<OutfitItem>& items) {
     // 2: live bundles and chunk entries from the merged patch (2026-11-05).
     std::string text = "2";
@@ -544,6 +560,9 @@ std::vector<OutfitFolder> outfit_folders(const fs::path& root) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.starts_with("item=")) folder.items.push_back(lower(line.substr(5)));
             if (line.starts_with("fingerprint=")) folder.fingerprint = line.substr(12);
+            if (line.starts_with("process=")) {
+                try { folder.process = static_cast<std::uint32_t>(std::stoul(line.substr(8))); } catch (const std::exception&) {}
+            }
         }
         auto [at, fresh] = newest.try_emplace(folder.wearer, folder);
         if (fresh) continue;
