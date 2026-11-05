@@ -57,7 +57,8 @@ public:
                 for (const auto& mod : mods::catalog().mods)
                     if (!mod.name.starts_with(dingosdk::synchros::outfit_mod_prefix) && mod.provides_layout)
                         sources.push_back({mod.directory, mod.name});
-                auto index = std::make_shared<dingosdk::synchros::Index>(std::move(sources), game_root());
+                auto index = std::make_shared<dingosdk::synchros::Index>(std::move(sources), game_root(),
+                                                                         game_root() / "Mods" / ".reskate");
                 log("Skate Synchros: " + std::to_string(index->items().size()) + " items of the enabled mods can be shared");
                 std::lock_guard lock(hold_);
                 index_ = std::move(index);
@@ -176,6 +177,14 @@ void write_outfit(std::uint64_t wearer) {
         try {
             std::vector<dingosdk::synchros::OutfitItem> items;
             for (const auto& item : listing) items.push_back(outfit_item(item));
+            // The same outfit as last time (asked for again and sent again unchanged): nothing to do.
+            const auto fingerprint = dingosdk::synchros::outfit_fingerprint(items);
+            for (const auto& folder : dingosdk::synchros::outfit_folders(outfit_mods_root()))
+                if (folder.wearer == wearer && folder.fingerprint == fingerprint) {
+                    log("Skate Synchros: " + std::to_string(wearer) + "'s outfit is as it was; already applied");
+                    --st.writing;
+                    return;
+                }
             const auto folder = dingosdk::synchros::next_outfit_folder(outfit_mods_root(), wearer);
             const auto made = dingosdk::synchros::write_outfit_mod(folder, wearer, game_root(), items,
                 [&](const ContentId& id) { return st.cache->read(id); });
@@ -216,7 +225,11 @@ Game game_hooks() {
         const auto lookup = item_origins::lookup(keys);
         // Until the merge's item list is read, nothing is asked for.
         if (!lookup.ready || lookup.facts.empty()) return true;
-        return lookup.facts.front().from_mod || lookup.facts.front().game;
+        const auto& fact = lookup.facts.front();
+        // An item this PC has only from a received outfit is asked for again: the wearer may send it
+        // differently now (a fix in the cutter, a changed mod), and what was received is replaced.
+        if (fact.from_mod && fact.folder.starts_with(dingosdk::synchros::outfit_mod_prefix)) return false;
+        return fact.from_mod || fact.game;
     };
     g.wearing = [] { return state().wearing; };
     g.game_item = [](std::string_view key) { return item_origins::game_item(key); };

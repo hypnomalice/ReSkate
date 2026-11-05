@@ -111,6 +111,7 @@ struct Index::State {
     std::vector<unsigned char> shader_source;             // by source: 1 a Deck Tool shader, 2 shader bytecode, 4 level data
     std::set<std::string> bundle_chunk_listed;   // chunks a bundle entry of is indexed
     std::unordered_map<std::string, std::size_t> bundle_twin;   // a TOC chunk's guid -> its bundle entry
+    std::size_t merged_twins{};                                 // bundle entries taken from the merged patch
     std::size_t unreadable{};
     // Each mod's bundle-reference table copies, read when a cut first needs them: per source,
     // table name -> its presets (lower-case path -> bundle index).
@@ -193,6 +194,57 @@ struct Index::State {
         if (const auto f = res_by_name.find(n.piece.name); f != res_by_name.end()) n.edges.push_back(f->second);
         add_names(names, n.edges);
         n.doc.reset();  // read again if ever needed; the cut has what it says
+    }
+
+    // A chunk a mod ships only in its TOC can still be one a bundle must list: the merge puts it in
+    // the bundle (with its record) when the mod's assets there name it, and the game looks it up in
+    // that bundle's own chunk table, which holds only what the bundle lists (65 records for the
+    // crash-test-dummy costume bundle on a viewer's PC, its five Soulworker chunks missing:
+    // 2026-11-05). So for each such chunk, the merged bundle's entry goes with it too.
+    void index_merged(const fs::path& dir) {
+        for (const auto* name : {"items", "globals"}) {
+            const auto path = dir / "Win32" / (std::string(name) + ".toc");
+            std::error_code error;
+            if (!fs::is_regular_file(path, error)) continue;
+            fb::TocDocument toc;
+            try { toc = fb::read_toc(read_file(path)); } catch (const std::exception&) { continue; }
+            const std::string superbundle = std::string("win32/") + name;
+            for (const auto& bundle : toc.bundles) {
+                try {
+                    auto region = fb::read_bundle_region(bundle.region);
+                    fb::BinaryBundle manifest;
+                    std::size_t first = 0;
+                    if (!region.inlineManifest.empty()) {
+                        manifest = fb::read_binary_bundle(region.inlineManifest);
+                    } else {
+                        if (region.files.empty() || !region.files.front().location.patch) continue;   // the game's, unchanged
+                        const auto& f = region.files.front();
+                        manifest = archives->read_manifest(dir, f.location, f.offset, f.size, game);
+                        first = 1;
+                    }
+                    (void)first;
+                    for (std::size_t i = 0; i < manifest.chunks.size(); ++i) {
+                        const auto key = guid_key(manifest.chunks[i].guid);
+                        const auto found = by_guid.find(key);
+                        if (found == by_guid.end() || nodes[found->second].piece.kind != Piece::toc_chunk ||
+                            bundle_twin.contains(key))
+                            continue;
+                        Node n;
+                        n.piece = nodes[found->second].piece;   // its bytes, from the mod that ships them
+                        n.piece.kind = Piece::chunk;
+                        n.piece.bundle = lower(bundle.name);
+                        n.piece.superbundle = superbundle;
+                        n.piece.asset = manifest.chunks[i];
+                        n.piece.chunk_record = one_record(manifest.chunkMetadata, i);
+                        n.guid = key;
+                        bundle_twin.emplace(key, nodes.size());
+                        bundle_chunk_listed.insert(key);
+                        nodes.push_back(std::move(n));
+                        ++merged_twins;
+                    }
+                } catch (const std::exception&) {}
+            }
+        }
     }
 
     void index_source(std::size_t s) {
@@ -378,7 +430,7 @@ struct Index::State {
     }
 };
 
-Index::Index(std::vector<Source> sources, fs::path game) : state_(std::make_unique<State>()) {
+Index::Index(std::vector<Source> sources, fs::path game, fs::path merged) : state_(std::make_unique<State>()) {
     auto& s = *state_;
     s.sources = std::move(sources);
     s.game = std::move(game);
@@ -386,6 +438,7 @@ Index::Index(std::vector<Source> sources, fs::path game) : state_(std::make_uniq
     s.archives = std::make_unique<vfs::GameArchives>(s.game / "Data", s.layout.root);
     s.archives->keep_open();
     for (std::size_t i = 0; i < s.sources.size(); ++i) s.index_source(i);
+    if (!merged.empty()) s.index_merged(merged);
     s.read_ebx();
 }
 

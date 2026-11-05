@@ -69,7 +69,9 @@ public:
     // Reads the cosmetics superbundles (items, globals) of `sources`, highest priority first, and
     // every EBX in them (items are told by their contents). `game` is the folder with Skate.exe.
     // Resources are read only when a cut reaches them.
-    Index(std::vector<Source> sources, std::filesystem::path game);
+    // `merged` is the merged patch (Mods/.reskate), or empty: where a chunk a mod ships only in its
+    // TOC is listed by a bundle once merged, that bundle's entry (with its record) goes with it too.
+    Index(std::vector<Source> sources, std::filesystem::path game, std::filesystem::path merged = {});
     ~Index();
     Index(const Index&) = delete;
     Index& operator=(const Index&) = delete;

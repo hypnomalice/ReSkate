@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <format>
 #include <fstream>
 #include <map>
 #include <set>
@@ -460,7 +461,7 @@ OutfitMod write_outfit_mod(const fs::path& directory, std::uint64_t wearer, cons
         // The game version stamp every mod that ships game data needs (mod_list.h, studio_marker_file).
         write_text(building / ".reskate-studio-patch",
                    "ReSkate Skate Synchros\nskate_sha256=" + std::string(supported_build::game_sha256) + "\n");
-        std::string marker = "wearer=" + std::to_string(wearer) + "\n";
+        std::string marker = "wearer=" + std::to_string(wearer) + "\nfingerprint=" + outfit_fingerprint(items) + "\n";
         for (const auto& key : keys) marker += "item=" + key + "\n";
         write_text(building / outfit_marker_file, marker);
 
@@ -503,6 +504,29 @@ std::string OutfitFolder::mod_name() const {
     return std::string(outfit_mod_prefix) + std::to_string(wearer) + "." + std::to_string(version);
 }
 
+std::string outfit_fingerprint(const std::vector<OutfitItem>& items) {
+    // 2: live bundles and chunk entries from the merged patch (2026-11-05).
+    std::string text = "2";
+    std::vector<std::string> parts;
+    for (const auto& item : items) {
+        std::string part = lower(item.item);
+        for (const auto& file : item.files) {
+            part += '|';
+            for (const auto b : file.id) part += std::format("{:02x}", b);
+            part += lower(file.bundle) + std::to_string(file.kind);
+        }
+        for (const auto& row : item.rows) part += '|' + lower(row.table) + lower(row.path) + std::to_string(row.bundle);
+        parts.push_back(std::move(part));
+    }
+    std::sort(parts.begin(), parts.end());
+    for (const auto& part : parts) text += '\n' + part;
+    std::vector<std::byte> bytes(text.size());
+    std::memcpy(bytes.data(), text.data(), text.size());
+    std::string out;
+    for (const auto b : sha1(bytes)) out += std::format("{:02x}", b);
+    return out;
+}
+
 std::vector<OutfitFolder> outfit_folders(const fs::path& root) {
     std::map<std::uint64_t, OutfitFolder> newest;
     std::vector<fs::path> older;
@@ -519,6 +543,7 @@ std::vector<OutfitFolder> outfit_folders(const fs::path& root) {
         while (std::getline(in, line)) {
             if (!line.empty() && line.back() == '\r') line.pop_back();
             if (line.starts_with("item=")) folder.items.push_back(lower(line.substr(5)));
+            if (line.starts_with("fingerprint=")) folder.fingerprint = line.substr(12);
         }
         auto [at, fresh] = newest.try_emplace(folder.wearer, folder);
         if (fresh) continue;

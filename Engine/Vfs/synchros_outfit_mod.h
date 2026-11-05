@@ -109,8 +109,13 @@ struct OutfitFolder {
     std::uint32_t version{};
     std::filesystem::path directory;
     std::vector<std::string> items;   // from its marker
+    std::string fingerprint;          // of what it was written from (outfit_fingerprint), from its marker
     [[nodiscard]] std::string mod_name() const;
 };
+// What a mod written from `items` holds, as text: the same items and files give the same text, so a
+// wearer's outfit received again unchanged need not be written or applied again. The format
+// version is part of it, so a writer that changes what it writes makes every outfit new again.
+[[nodiscard]] std::string outfit_fingerprint(const std::vector<OutfitItem>& items);
 [[nodiscard]] std::vector<OutfitFolder> outfit_folders(const std::filesystem::path& root);
 // Where the next version of `wearer`'s mod goes.
 [[nodiscard]] std::filesystem::path next_outfit_folder(const std::filesystem::path& root, std::uint64_t wearer);
