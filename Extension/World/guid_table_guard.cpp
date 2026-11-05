@@ -51,6 +51,18 @@ std::uintptr_t finding(void* table, const std::uint32_t* key, void* a, std::uint
             "GUID table guard: key {:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} is not in its table "
             "(the game would freeze looking for it); it is passed over, with nothing made for it ({} so far).",
             key[0], key[1] & 0xffff, key[1] >> 16, bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15], n);
+        // Which table: its record count, and its owner (the table is at owner + 0x8c0 in the one
+        // caller, Skate.exe+0x420f930, which picks the owner by an id it keeps at owner + 0xb0), and
+        // who asked. For finding out why a chunk a merged bundle lists is not in it (2026-11-05).
+        std::uint32_t count{}, owner_id{};
+        const auto at = reinterpret_cast<std::uintptr_t>(table);
+        (void)memory::peek(at + gt::count, count);
+        (void)memory::peek(at - 0x8c0 + 0xb0, owner_id);
+        const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+        const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+        logging::log(logging::Level::warning, logging::Channel::runtime,
+            "GUID table guard:   the table holds {} record(s); its owner's id {:#x}; asked from Skate.exe+{:#x}", count, owner_id,
+            caller >= base ? caller - base : 0);
     }
     // A handle the game can keep, for no items: record 0 with its items copied in place of the
     // missing one's left a record shaped for another and crashed later (2026-10-17, 2.5 min on).
